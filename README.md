@@ -1,6 +1,4 @@
 
-# How it works
-
 
 # Activate Virtual env
     # virtualenv env

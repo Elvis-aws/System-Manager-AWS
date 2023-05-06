@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An example Lambda function using the Secrets Manager Lambda Extension
+Parameters:
+  SecretName:
+    Description: Secret Name
+    Type: String
+    Default: MySecret
+    AllowedPattern: ^[a-zA-Z0-9_.-/]*$
+Resources:
+  MySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name:
+        Ref: SecretName
+      Description: Secret with dynamically generated secret password.
+      GenerateSecretString:
+        PasswordLength: 30
+        ExcludeCharacters: '"@/\'
+  SecretsManagerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: SecretsManagerFunction
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+      - x86_64
+      Layers:
+      - arn:aws:lambda:eu-west-2:133256977650:layer:AWS-Parameters-and-Secrets-Lambda-Extension:2
+      Environment:
+        Variables:
+          SECRET_NAME:
+            Ref: SecretName
+          PARAMETERS_SECRETS_EXTENSION_HTTP_PORT: '2773'
+      Policies:
+      - AWSSecretsManagerGetSecretValuePolicy:
+          SecretArn:
+            Ref: MySecret
+      Events:
+        HelloWorld:
+          Type: Api
+          Properties:
+            Path: /secrets
+            Method: get
+    Metadata:
+      SamResourceId: SecretsManagerFunction
+Outputs:
+  MySecret:
+    Value:
+      Ref: MySecret
+    Description: MySecret ARN
+  MySecretName:
+    Value:
+      Ref: SecretName
+    Description: SecretName
+  Function:
+    Value:
+      Ref: SecretsManagerFunction
+    Description: HelloWorldFunction Lambda Function
+  SecretsManagerAPI:
+    Description: API Gateway endpoint URL for Prod stage for SNS function
+    Value:
+      Fn::Sub: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/secrets/
