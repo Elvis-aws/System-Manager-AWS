@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Conditions:
+  AllowSSHAccess:
+    Fn::Equals:
+    - '0.0.0.0/0'
+    - true
+Resources:
+  smsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-smsbucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+  MyBucketAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ssm.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: MyBucketAccessPolicy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetBucketLocation
+            - s3:ListBucket
+            - s3:ListBucketMultipartUploads
+            Resource:
+              Fn::Sub: arn:aws:s3:::${smsBucket}
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:AbortMultipartUpload
+            Resource:
+              Fn::Sub: arn:aws:s3:::${smsBucket}/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: 934433842270
+              ArnLike:
+                aws:SourceArn: arn:aws:ssm:*:934433842270:resource-data-sync/*

@@ -1,0 +1,317 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Conditions:
+  AllowSSHAccess: !Equals [0.0.0.0/0, true]
+
+Resources:
+
+############################################
+################## VPC #####################
+############################################
+  MyInventoryConfig:
+    Type: AWS::SSM::ResourceDataSync
+    Properties:
+      S3Destination:
+        BucketName: !Ref smsBucket
+        SyncFormat: JsonSerDe
+        BucketPrefix: ssm-inventory/
+        BucketRegion: eu-west-2
+      SyncName: my-inventory-config
+      SyncType: InventorySync
+      SyncSource:
+        SourceType: AwsOrganizations
+        AwsOrganizationsSource:
+          OrganizationSourceType: EntireOrganization
+        SourceRegions:
+          - !Ref AWS::Region
+        IncludeFutureRegions: false
+############################################
+########## DESTINATION S3 BUCKET ###########
+############################################
+  smsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-smsbucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+  MyBucketAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: MyBucketAccessPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub arn:aws:s3:::${smsBucket}
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                Resource: !Sub arn:aws:s3:::${smsBucket}/*
+                Condition:
+                  StringEquals:
+                    s3:x-amz-acl: bucket-owner-full-control
+                    aws:SourceAccount: 934433842270
+                  ArnLike:
+                    aws:SourceArn: arn:aws:ssm:*:934433842270:resource-data-sync/*
+
+  MyAssociation:
+    Type: AWS::SSM::Association
+    DependsOn: ubuntuInstance
+    Properties:
+      AssociationName: my-association
+      InstanceId: !Ref ubuntuInstance
+      Name: AWS-GatherSoftwareInventory
+      Parameters:
+        - Key: InventoryType
+          Value: AWS:Application
+      ScheduleExpression: 'rate(30 minutes)'
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref ubuntuInstance
+############################################
+################## VPC #####################
+############################################
+  smsVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SMSVPC
+############################################
+########### PUBLIC SUBNET ##################
+############################################
+  publicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      VpcId: !Ref smsVPC
+      CidrBlock: 10.0.0.0/25
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-publicSubnet
+############################################
+########### PRIVATE ROUTETABLE ##############
+############################################
+  privateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      VpcId: !Ref smsVPC
+      CidrBlock: 10.0.0.128/25
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-privateSubnet
+############################################
+########### PUBLIC ROUTETABLE ##############
+############################################
+  publicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref smsVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-routetable
+############################################
+########### PRIVATE ROUTETABLE ##############
+############################################
+  privateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref smsVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-privateRouteTable
+############################################
+############ PUBLIC ROUTE ##################
+############################################
+  publicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref publicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref smsInternetGateway
+############################################
+############## Internet Gateway### #########
+############################################
+  smsInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-myInternetGateway
+############################################
+####### PUBLIC ROUTE TABLE ASSOCIATION #####
+############################################
+  publicSubnetouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref publicSubnet
+      RouteTableId: !Ref publicRouteTable
+############################################
+####### PRIVATE ROUTE TABLE ASSOCIATION #####
+############################################
+  privateRouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref privateSubnet
+      RouteTableId: !Ref privateRouteTable
+############################################
+############# SECURITY GROUP ###############
+############################################
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: My security group description
+      VpcId: !Ref smsVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+############################################
+################## EC2 #####################
+############################################
+  ubuntuInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: publicRouteTable
+    Properties:
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref publicSubnet
+          AssociatePublicIpAddress: true
+          GroupSet: [ !Ref securityGroup ]
+      KeyName: ec2-key
+      ImageId: ami-0648ea225c13e0729
+      InstanceType: t2.micro
+      Monitoring: true
+      UserData: !Base64 |
+        #!/bin/bash -ex
+        yum update -y
+        yum install -y httpd
+        systemctl start httpd
+        systemctl enable httpd
+        echo "<h1>Hello Demo SSM from $(hostname -f)</h1>" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ubuntuInstance
+############################################
+######### Gateway Attachment ###############
+############################################
+  attachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref smsVPC
+      InternetGatewayId: !Ref smsInternetGateway
+############################################
+######### ELASTIC IP ADDRESS ###############
+############################################
+  elasticIPFoNateGateway:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+############################################
+############### NAT GATEWAY ################
+############################################
+  natGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt elasticIPFoNateGateway.AllocationId
+      SubnetId: !Ref publicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-natGateway
+############################################
+################ ROUTE #####################
+############################################
+  routeName:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref privateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref natGateway
+############################################
+############## NETWORK ACL #################
+############################################
+  myNetworkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref smsVPC
+      Tags:
+        - Key: name
+          Value: !Sub ${AWS::StackName}-myNetworkAcl
+############################################
+######### NETWORKACL INBOUND ROUTE #########
+############################################
+  InboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref  myNetworkAcl
+      RuleNumber: 100
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: 172.16.0.0/24
+      PortRange:
+        From: 22
+        To: 22
+############################################
+######### NETWORKACL OUTBOUND ROUTE ########
+############################################
+  OutboundRule:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref  myNetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      Egress: true
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+############################################
+############ SUBNET ASSOCIATION ############
+############################################
+  mySubnetNetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref publicSubnet
+      NetworkAclId: !Ref myNetworkAcl
+
+############################################
+############### Output #####################
+############################################
+Outputs:
+  outputubuntuInstance:
+    Description: created ubuntuInstance
+    Value: !Ref ubuntuInstance
